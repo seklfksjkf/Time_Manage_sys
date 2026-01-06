@@ -1,0 +1,18 @@
+# Database Configuration Example
+# Copy this file and rename it to .env in the root directory
+
+DB_HOST=localhost
+DB_PORT=3306
+DB_USER=root
+DB_PASSWORD=your_password_here
+DB_NAME=time_manage_sys
+
+# Flask Configuration
+FLASK_ENV=development
+SECRET_KEY=your_secret_key_here
+JWT_SECRET_KEY=your_jwt_secret_key_here
+
+# Server Configuration
+FLASK_HOST=0.0.0.0
+FLASK_PORT=5000
+

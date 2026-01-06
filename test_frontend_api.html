@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Test Timeline API from Browser</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+        }
+        button {
+            background: #409eff;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            margin: 10px 5px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        button:hover {
+            background: #66b1ff;
+        }
+        .output {
+            background: #f9f9f9;
+            border: 1px solid #ddd;
+            padding: 15px;
+            margin-top: 20px;
+            border-radius: 5px;
+            max-height: 400px;
+            overflow-y: auto;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+        }
+        .success { color: #67c23a; }
+        .error { color: #f56c6c; }
+        .info { color: #409eff; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔍 Timeline API Browser Test</h1>
+        <p>This page tests the Timeline API directly from the browser.</p>
+        
+        <div>
+            <button onclick="testLogin()">1. Test Login</button>
+            <button onclick="testGetProjects()">2. Get Projects</button>
+            <button onclick="testTimeline()">3. Test Timeline API</button>
+            <button onclick="clearOutput()">Clear</button>
+        </div>
+        
+        <div id="output" class="output">
+            <div class="info">Click buttons above to test...</div>
+        </div>
+    </div>
+
+    <script>
+        let token = localStorage.getItem('access_token');
+        let projectId = 2; // Default project ID
+
+        function log(message, type = 'info') {
+            const output = document.getElementById('output');
+            const div = document.createElement('div');
+            div.className = type;
+            div.textContent = message;
+            output.appendChild(div);
+            output.scrollTop = output.scrollHeight;
+        }
+
+        function clearOutput() {
+            document.getElementById('output').innerHTML = '';
+        }
+
+        async function testLogin() {
+            clearOutput();
+            log('🔐 Testing login...', 'info');
+            
+            try {
+                const response = await fetch('http://localhost:5000/api/auth/login', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        username: 'admin',
+                        password: 'admin123'
+                    })
+                });
+
+                log(`Status: ${response.status}`, 'info');
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    token = data.access_token;
+                    localStorage.setItem('access_token', token);
+                    log('✅ Login successful!', 'success');
+                    log(`Token: ${token.substring(0, 50)}...`, 'info');
+                } else {
+                    const error = await response.json();
+                    log(`❌ Login failed: ${JSON.stringify(error)}`, 'error');
+                }
+            } catch (error) {
+                log(`❌ Error: ${error.message}`, 'error');
+            }
+        }
+
+        async function testGetProjects() {
+            if (!token) {
+                log('❌ No token! Please login first.', 'error');
+                return;
+            }
+
+            clearOutput();
+            log('📂 Getting projects...', 'info');
+            
+            try {
+                const response = await fetch('http://localhost:5000/api/projects', {
+                    headers: {
+                        'Authorization': `Bearer ${token}`,
+                        'Content-Type': 'application/json'
+                    }
+                });
+
+                log(`Status: ${response.status}`, 'info');
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    const projects = data.projects || [];
+                    log(`✅ Found ${projects.length} projects`, 'success');
+                    
+                    projects.forEach((p, i) => {
+                        log(`  ${i + 1}. ID: ${p.id}, Name: ${p.name}`, 'info');
+                        if (i === 0) {
+                            projectId = p.id;
+                            log(`  → Will use project ID ${projectId} for timeline test`, 'info');
+                        }
+                    });
+                } else {
+                    const error = await response.json();
+                    log(`❌ Failed: ${JSON.stringify(error)}`, 'error');
+                }
+            } catch (error) {
+                log(`❌ Error: ${error.message}`, 'error');
+            }
+        }
+
+        async function testTimeline() {
+            if (!token) {
+                log('❌ No token! Please login first.', 'error');
+                return;
+            }
+
+            clearOutput();
+            log(`📊 Testing Timeline API for project ${projectId}...`, 'info');
+            log(`URL: http://localhost:5000/api/timeline/projects/${projectId}`, 'info');
+            
+            try {
+                const response = await fetch(`http://localhost:5000/api/timeline/projects/${projectId}`, {
+                    headers: {
+                        'Authorization': `Bearer ${token}`,
+                        'Content-Type': 'application/json'
+                    }
+                });
+
+                log(`Status: ${response.status}`, response.ok ? 'success' : 'error');
+                
+                const data = await response.json();
+                
+                if (response.ok) {
+                    log('✅ Timeline API successful!', 'success');
+                    log(`Tasks: ${data.tasks?.length || 0}`, 'info');
+                    log(`Milestones: ${data.milestones?.length || 0}`, 'info');
+                    log(`Dependencies: ${data.dependencies?.length || 0}`, 'info');
+                    
+                    if (data.tasks && data.tasks.length > 0) {
+                        log('\nFirst task:', 'info');
+                        const task = data.tasks[0];
+                        log(`  ID: ${task.id}`, 'info');
+                        log(`  Title: ${task.title}`, 'info');
+                        log(`  Start: ${task.start_date}`, 'info');
+                        log(`  End: ${task.end_date}`, 'info');
+                        log(`  Status: ${task.status}`, 'info');
+                    } else {
+                        log('⚠️  No tasks with dates found', 'info');
+                        log('Please add tasks with start and end dates to the project', 'info');
+                    }
+                    
+                    log('\nFull response:', 'info');
+                    log(JSON.stringify(data, null, 2), 'info');
+                } else {
+                    log(`❌ API Error: ${JSON.stringify(data)}`, 'error');
+                }
+            } catch (error) {
+                log(`❌ Error: ${error.message}`, 'error');
+                log('Make sure backend is running on port 5000', 'error');
+            }
+        }
+
+        // Auto-load token on page load
+        window.addEventListener('load', () => {
+            if (token) {
+                log('✅ Found existing token in localStorage', 'success');
+                log('You can directly test Timeline API (button 3)', 'info');
+            } else {
+                log('ℹ️  No token found. Please login first (button 1)', 'info');
+            }
+        });
+    </script>
+</body>
+</html>
+
