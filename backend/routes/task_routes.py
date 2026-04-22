@@ -7,6 +7,7 @@ from extensions import db
 from models.task import Task
 from models.task_dependency import TaskDependency
 from models.task_comment import TaskComment
+from models.task_assignment import TaskAssignment
 from models.project_member import ProjectMember
 from models.notification import Notification
 from models.version_history import VersionHistory
@@ -61,6 +62,11 @@ def create_task():
             if field not in data:
                 return jsonify({'error': f'Missing required field: {field}'}), 400
         
+        # Handle assigned_to - if list, set to None (use TaskAssignment instead)
+        assigned_to = data.get('assigned_to')
+        if isinstance(assigned_to, list):
+            assigned_to = None  # Multiple assignees handled via TaskAssignment
+
         # Create task
         task = Task(
             project_id=data['project_id'],
@@ -73,24 +79,49 @@ def create_task():
             status=data.get('status', 'pending'),
             priority=data.get('priority', 'medium'),
             color=data.get('color'),
-            assigned_to=data.get('assigned_to'),
+            assigned_to=assigned_to,
             created_by=current_user_id
         )
         
         db.session.add(task)
         db.session.flush()
         
-        # Create notification if assigned
-        if task.assigned_to and task.assigned_to != current_user_id:
-            notification = Notification(
-                user_id=task.assigned_to,
-                type='task_assigned',
-                title='New Task Assigned',
-                message=f'You have been assigned to task: {task.title}',
-                related_entity_type='task',
-                related_entity_id=task.id
-            )
-            db.session.add(notification)
+        # Handle array of assignees (for multiple assignees support)
+        assignees = data.get('assigned_to')
+        if assignees:
+            if isinstance(assignees, list):
+                # Multiple assignees - create TaskAssignment records
+                for user_id in assignees:
+                    assignment = TaskAssignment(
+                        task_id=task.id,
+                        user_id=user_id,
+                        assigned_by=current_user_id
+                    )
+                    db.session.add(assignment)
+                    # Create notification for each assignee
+                    if user_id != current_user_id:
+                        notification = Notification(
+                            user_id=user_id,
+                            type='task_assigned',
+                            title='New Task Assigned',
+                            message=f'You have been assigned to task: {task.title}',
+                            related_entity_type='task',
+                            related_entity_id=task.id
+                        )
+                        db.session.add(notification)
+            else:
+                # Single assignee (backward compatibility)
+                task.assigned_to = assignees
+                if assignees != current_user_id:
+                    notification = Notification(
+                        user_id=assignees,
+                        type='task_assigned',
+                        title='New Task Assigned',
+                        message=f'You have been assigned to task: {task.title}',
+                        related_entity_type='task',
+                        related_entity_id=task.id
+                    )
+                    db.session.add(notification)
         
         # Log version history
         history = VersionHistory(
@@ -175,20 +206,55 @@ def update_task(task_id):
         if 'color' in data:
             task.color = data['color']
         if 'assigned_to' in data:
-            old_values['assigned_to'] = task.assigned_to
-            task.assigned_to = data['assigned_to']
-            
-            # Create notification for new assignee
-            if task.assigned_to and task.assigned_to != old_assignee:
-                notification = Notification(
-                    user_id=task.assigned_to,
-                    type='task_assigned',
-                    title='Task Reassigned',
-                    message=f'You have been assigned to task: {task.title}',
-                    related_entity_type='task',
-                    related_entity_id=task.id
-                )
-                db.session.add(notification)
+            new_assignees = data['assigned_to']
+            if isinstance(new_assignees, list):
+                # Multiple assignees - update TaskAssignment records
+                old_assignees = set(ta.user_id for ta in task.task_assignments)
+                new_assignees_set = set(new_assignees)
+                
+                # Remove assignments that are no longer needed
+                for ta in task.task_assignments:
+                    if ta.user_id not in new_assignees_set:
+                        db.session.delete(ta)
+                
+                # Add new assignments
+                for user_id in new_assignees:
+                    if user_id not in old_assignees:
+                        assignment = TaskAssignment(
+                            task_id=task.id,
+                            user_id=user_id,
+                            assigned_by=current_user_id
+                        )
+                        db.session.add(assignment)
+                        # Create notification for new assignee
+                        if user_id != current_user_id:
+                            notification = Notification(
+                                user_id=user_id,
+                                type='task_assigned',
+                                title='Task Reassigned',
+                                message=f'You have been assigned to task: {task.title}',
+                                related_entity_type='task',
+                                related_entity_id=task.id
+                            )
+                            db.session.add(notification)
+                
+                old_values['assigned_to'] = list(old_assignees)
+            else:
+                # Single assignee (backward compatibility)
+                old_values['assigned_to'] = task.assigned_to
+                task.assigned_to = new_assignees
+                
+                # Create notification for new assignee
+                if new_assignees and new_assignees != old_assignee:
+                    notification = Notification(
+                        user_id=new_assignees,
+                        type='task_assigned',
+                        title='Task Reassigned',
+                        message=f'You have been assigned to task: {task.title}',
+                        related_entity_type='task',
+                        related_entity_id=task.id
+                    )
+                    db.session.add(notification)
         
         # Log version history
         if old_values:

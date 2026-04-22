@@ -28,9 +28,9 @@ class Task(db.Model):
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
     # Relationships
-    dependencies = db.relationship('TaskDependency', 
+    dependencies = db.relationship('TaskDependency',
                                   foreign_keys='TaskDependency.task_id',
-                                  backref='task', 
+                                  backref='task',
                                   lazy='dynamic',
                                   cascade='all, delete-orphan')
     dependents = db.relationship('TaskDependency',
@@ -39,6 +39,8 @@ class Task(db.Model):
                                 lazy='dynamic',
                                 cascade='all, delete-orphan')
     comments = db.relationship('TaskComment', backref='task', lazy='dynamic', cascade='all, delete-orphan')
+    task_assignments = db.relationship('TaskAssignment', backref='task', lazy='dynamic',
+                                       cascade='all, delete-orphan')
     
     def to_dict(self, include_relations=False):
         """Convert to dictionary"""
@@ -57,6 +59,8 @@ class Task(db.Model):
             'color': self.color,
             'assigned_to': self.assigned_to,
             'assigned_to_name': self.assignee.full_name if self.assignee else None,
+            'assignees': [ta.to_dict() for ta in self.task_assignments.all()],
+            'assigned_to_names': [ta.user.full_name for ta in self.task_assignments.all() if ta.user],
             'created_by': self.created_by,
             'created_by_name': self.creator.full_name if self.creator else None,
             'created_at': self.created_at.isoformat() if self.created_at else None,

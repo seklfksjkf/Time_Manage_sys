@@ -3,10 +3,34 @@
     <div class="container">
       <div class="page-header">
         <h2 class="page-title">Projects</h2>
-        <el-button type="primary" @click="showCreateDialog = true">
-          <el-icon><Plus /></el-icon>
-          Create Project
-        </el-button>
+        <div style="display: flex; gap: 12px; align-items: center;">
+          <el-select
+            v-model="selectedProjectToDelete"
+            placeholder="Select project to delete"
+            style="width: 220px"
+            clearable
+          >
+            <el-option
+              v-for="project in projectStore.projects"
+              :key="project.id"
+              :label="project.name"
+              :value="project.id"
+            />
+          </el-select>
+          <el-button
+            type="danger"
+            @click="handleDeleteProject"
+            :disabled="!selectedProjectToDelete"
+          >
+            <el-icon><Delete /></el-icon>
+            Delete Project
+          </el-button>
+          <el-divider direction="vertical" />
+          <el-button type="primary" @click="showCreateDialog = true">
+            <el-icon><Plus /></el-icon>
+            Create Project
+          </el-button>
+        </div>
       </div>
 
       <el-row :gutter="20">
@@ -35,6 +59,82 @@
           </el-card>
         </el-col>
       </el-row>
+
+      <!-- Admin Tasks Management Section -->
+      <el-divider content-position="left">
+        <span style="font-size: 16px; font-weight: 600;">Tasks Management (Admin)</span>
+      </el-divider>
+
+      <el-card class="tasks-card">
+        <template #header>
+          <div style="display: flex; justify-content: space-between; align-items: center;">
+            <span>All Tasks</span>
+            <el-select v-model="taskFilter" placeholder="Filter by project" style="width: 200px" clearable>
+              <el-option label="All Projects" value="" />
+              <el-option
+                v-for="project in projectStore.projects"
+                :key="project.id"
+                :label="project.name"
+                :value="project.id"
+              />
+            </el-select>
+          </div>
+        </template>
+
+        <el-table :data="filteredTasks" style="width: 100%" v-loading="loadingTasks">
+          <el-table-column prop="title" label="Task" min-width="200" />
+          
+          <el-table-column prop="project_id" label="Project" width="150">
+            <template #default="scope">
+              <span>{{ getProjectName(scope.row.project_id) }}</span>
+            </template>
+          </el-table-column>
+          
+          <el-table-column prop="status" label="Status" width="120">
+            <template #default="scope">
+              <el-tag :type="getTaskStatusType(scope.row.status)" size="small">
+                {{ scope.row.status }}
+              </el-tag>
+            </template>
+          </el-table-column>
+          
+          <el-table-column prop="priority" label="Priority" width="100">
+            <template #default="scope">
+              <span :class="`priority-${scope.row.priority}`">
+                {{ scope.row.priority }}
+              </span>
+            </template>
+          </el-table-column>
+          
+          <el-table-column prop="assigned_to_name" label="Assigned To" width="150">
+            <template #default="scope">
+              <span>{{ scope.row.assigned_to_name || 'Unassigned' }}</span>
+            </template>
+          </el-table-column>
+          
+          <el-table-column prop="end_date" label="Due Date" width="120">
+            <template #default="scope">
+              {{ formatDate(scope.row.end_date) }}
+            </template>
+          </el-table-column>
+          
+          <el-table-column label="Actions" width="100" fixed="right">
+            <template #default="scope">
+              <el-button
+                type="danger"
+                size="small"
+                text
+                @click="handleDeleteTask(scope.row)"
+              >
+                <el-icon><Delete /></el-icon>
+                Delete
+              </el-button>
+            </template>
+          </el-table-column>
+        </el-table>
+
+        <el-empty v-if="!loadingTasks && filteredTasks.length === 0" description="No tasks found" />
+      </el-card>
 
       <!-- Create Project Dialog -->
       <el-dialog v-model="showCreateDialog" title="Create New Project" width="500px">
@@ -79,6 +179,30 @@
           <el-form-item label="Color">
             <el-color-picker v-model="newProject.color" />
           </el-form-item>
+          
+          <el-form-item label="Team Members">
+            <el-select
+              v-model="selectedMembers"
+              multiple
+              filterable
+              placeholder="Select team members"
+              style="width: 100%"
+              :loading="loadingUsers"
+            >
+              <el-option
+                v-for="user in availableUsers"
+                :key="user.id"
+                :label="user.full_name || user.username"
+                :value="user.id"
+              >
+                <div style="display: flex; align-items: center; gap: 8px;">
+                  <el-avatar :size="24" :src="user.avatar" />
+                  <span>{{ user.full_name || user.username }}</span>
+                  <el-tag v-if="user.role" size="small" type="info">{{ user.role }}</el-tag>
+                </div>
+              </el-option>
+            </el-select>
+          </el-form-item>
         </el-form>
         
         <template #footer>
@@ -91,16 +215,23 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, onMounted, watch, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { useProjectStore } from '@/stores/projects'
 import MainLayout from '@/components/Layout/MainLayout.vue'
-import { ElMessage } from 'element-plus'
-import { Plus, List, User } from '@element-plus/icons-vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { Plus, List, User, Delete } from '@element-plus/icons-vue'
+import authAPI from '@/services/api/auth'
+import projectAPI from '@/services/api/projects'
+import taskAPI from '@/services/api/tasks'
 
 const router = useRouter()
 const projectStore = useProjectStore()
 const showCreateDialog = ref(false)
+const users = ref([])
+const selectedMembers = ref([])
+const loadingUsers = ref(false)
+const selectedProjectToDelete = ref(null)
 
 const newProject = reactive({
   name: '',
@@ -108,6 +239,50 @@ const newProject = reactive({
   start_date: null,
   deadline: null,
   color: '#409eff'
+})
+
+// Tasks management
+const tasks = ref([])
+const loadingTasks = ref(false)
+const taskFilter = ref('')
+
+const filteredTasks = computed(() => {
+  if (!taskFilter.value) return tasks.value
+  return tasks.value.filter(task => task.project_id === taskFilter.value)
+})
+
+// Get current user from localStorage or auth store
+const currentUser = computed(() => {
+  const userStr = localStorage.getItem('user')
+  return userStr ? JSON.parse(userStr) : null
+})
+
+// Filter out current user from available users
+const availableUsers = computed(() => {
+  if (!currentUser.value) return users.value
+  return users.value.filter(user => user.id !== currentUser.value.id)
+})
+
+// Fetch users when dialog opens
+const fetchUsers = async () => {
+  loadingUsers.value = true
+  try {
+    const response = await authAPI.getUsers()
+    users.value = response.data.users || []
+  } catch (error) {
+    console.error('Failed to fetch users:', error)
+    ElMessage.error('Failed to load users')
+  } finally {
+    loadingUsers.value = false
+  }
+}
+
+// Watch dialog visibility to fetch users
+watch(showCreateDialog, (isOpen) => {
+  if (isOpen) {
+    fetchUsers()
+    selectedMembers.value = []
+  }
 })
 
 const getStatusType = (status) => {
@@ -145,9 +320,26 @@ const handleCreate = async () => {
   }
 
   const result = await projectStore.createProject(projectData)
-  
+
   if (result.success) {
-    ElMessage.success('Project created successfully')
+    // Add selected members to the project
+    if (selectedMembers.value.length > 0) {
+      try {
+        for (const userId of selectedMembers.value) {
+          await projectAPI.addMember(result.project.id, {
+            user_id: userId,
+            role: 'member'
+          })
+        }
+        ElMessage.success(`Project created with ${selectedMembers.value.length} members`)
+      } catch (error) {
+        console.error('Failed to add members:', error)
+        ElMessage.warning('Project created but some members could not be added')
+      }
+    } else {
+      ElMessage.success('Project created successfully')
+    }
+
     showCreateDialog.value = false
     Object.assign(newProject, {
       name: '',
@@ -156,13 +348,112 @@ const handleCreate = async () => {
       deadline: null,
       color: '#409eff'
     })
+    selectedMembers.value = []
   } else {
     ElMessage.error(result.error)
   }
 }
 
+// Tasks management functions
+const fetchTasks = async () => {
+  loadingTasks.value = true
+  try {
+    const response = await taskAPI.getAll()
+    tasks.value = response.data.tasks || []
+  } catch (error) {
+    console.error('Failed to fetch tasks:', error)
+    ElMessage.error('Failed to load tasks')
+  } finally {
+    loadingTasks.value = false
+  }
+}
+
+const getProjectName = (projectId) => {
+  const project = projectStore.projects.find(p => p.id === projectId)
+  return project?.name || `Project #${projectId}`
+}
+
+const formatDate = (date) => {
+  if (!date) return 'N/A'
+  return new Date(date).toLocaleDateString()
+}
+
+const getTaskStatusType = (status) => {
+  const types = {
+    pending: 'info',
+    in_progress: 'warning',
+    completed: 'success',
+    blocked: 'danger',
+    cancelled: 'info'
+  }
+  return types[status] || ''
+}
+
+const handleDeleteTask = async (task) => {
+  try {
+    await ElMessageBox.confirm(
+      `Are you sure you want to delete task "${task.title}"?`,
+      'Delete Task',
+      {
+        confirmButtonText: 'Delete',
+        cancelButtonText: 'Cancel',
+        type: 'warning'
+      }
+    )
+
+    await taskAPI.delete(task.id)
+    ElMessage.success('Task deleted successfully')
+    fetchTasks()
+  } catch (error) {
+    if (error !== 'cancel') {
+      console.error('Failed to delete task:', error)
+      ElMessage.error(error.response?.data?.error || 'Failed to delete task')
+    }
+  }
+}
+
+const handleDeleteProject = async () => {
+  if (!selectedProjectToDelete.value) {
+    ElMessage.warning('Please select a project to delete')
+    return
+  }
+
+  const project = projectStore.projects.find(p => p.id === selectedProjectToDelete.value)
+  if (!project) {
+    ElMessage.error('Project not found')
+    return
+  }
+
+  try {
+    await ElMessageBox.confirm(
+      `Are you sure you want to delete project "${project.name}"? This action cannot be undone and all associated tasks will be removed.`,
+      'Delete Project',
+      {
+        confirmButtonText: 'Delete',
+        cancelButtonText: 'Cancel',
+        type: 'warning'
+      }
+    )
+
+    const result = await projectStore.deleteProject(selectedProjectToDelete.value)
+    if (result.success) {
+      ElMessage.success(`Project "${project.name}" deleted successfully`)
+      selectedProjectToDelete.value = null
+      fetchTasks()
+    } else {
+      ElMessage.error(result.error || 'Failed to delete project')
+    }
+  } catch (error) {
+    if (error !== 'cancel') {
+      console.error('Failed to delete project:', error)
+      ElMessage.error(error.response?.data?.error || 'Failed to delete project')
+    }
+  }
+}
+
 onMounted(() => {
   projectStore.fetchProjects()
+  fetchTasks()
 })
 </script>
 
@@ -276,5 +567,26 @@ onMounted(() => {
 
 :deep(.el-progress__text) {
   font-weight: 700;
+}
+
+.tasks-card {
+  margin-top: 20px;
+}
+
+.priority-low {
+  color: #67c23a;
+}
+
+.priority-medium {
+  color: #e6a23c;
+}
+
+.priority-high {
+  color: #f56c6c;
+}
+
+.priority-critical {
+  color: #ff0000;
+  font-weight: bold;
 }
 </style>

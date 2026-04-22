@@ -62,7 +62,25 @@
                   </span>
                 </template>
               </el-table-column>
-              <el-table-column prop="assigned_to_name" label="Assigned To" width="150" />
+              <el-table-column label="Assigned To" width="180">
+                <template #default="scope">
+                  <div v-if="scope.row.assigned_to_names && scope.row.assigned_to_names.length > 0">
+                    <el-tag
+                      v-for="(name, index) in scope.row.assigned_to_names"
+                      :key="index"
+                      size="small"
+                      type="info"
+                      style="margin-right: 4px; margin-bottom: 2px;"
+                    >
+                      {{ name }}
+                    </el-tag>
+                  </div>
+                  <span v-else-if="scope.row.assigned_to_name" class="text-gray">
+                    {{ scope.row.assigned_to_name }}
+                  </span>
+                  <span v-else class="text-gray">Unassigned</span>
+                </template>
+              </el-table-column>
               <el-table-column prop="progress" label="Progress" width="120">
                 <template #default="scope">
                   <el-progress :percentage="scope.row.progress" :stroke-width="6" />
@@ -75,13 +93,29 @@
         <el-col :span="6">
           <el-card class="members-card">
             <template #header>
-              <span>Team Members</span>
+              <div style="display: flex; justify-content: space-between; align-items: center;">
+                <span>Team Members ({{ members.length }})</span>
+                <el-button type="primary" size="small" @click="openAddMemberDialog">
+                  <el-icon><Plus /></el-icon>
+                  Add
+                </el-button>
+              </div>
             </template>
             <div class="member-list">
               <div v-for="member in members" :key="member.id" class="member-item">
                 <el-avatar :size="32">{{ getInitials(member.user_name) }}</el-avatar>
                 <span>{{ member.user_name }}</span>
                 <el-tag size="small">{{ member.role }}</el-tag>
+                <el-button
+                  v-if="member.role !== 'owner'"
+                  type="danger"
+                  size="small"
+                  text
+                  @click="handleRemoveMember(member)"
+                  :title="'Remove member'"
+                >
+                  <el-icon><Delete /></el-icon>
+                </el-button>
               </div>
             </div>
           </el-card>
@@ -168,7 +202,14 @@
             
             <el-col :span="12">
               <el-form-item label="Assign To">
-                <el-select v-model="newTask.assigned_to" style="width: 100%">
+                <el-select
+                  v-model="newTask.assigned_to"
+                  multiple
+                  collapse-tags
+                  collapse-tags-tooltip
+                  placeholder="Select assignees"
+                  style="width: 100%"
+                >
                   <el-option
                     v-for="member in members"
                     :key="member.user_id"
@@ -186,18 +227,59 @@
           <el-button type="primary" @click="handleCreateTask">Create</el-button>
         </template>
       </el-dialog>
+
+      <!-- Add Member Dialog -->
+      <el-dialog v-model="showAddMemberDialog" title="Add Team Member" width="400px">
+        <el-form label-position="top">
+          <el-form-item label="Select User">
+            <el-select
+              v-model="selectedUserId"
+              filterable
+              placeholder="Search and select a user"
+              style="width: 100%"
+              :loading="loadingUsers"
+            >
+              <el-option
+                v-for="user in availableUsers"
+                :key="user.id"
+                :label="user.full_name || user.username"
+                :value="user.id"
+              >
+                <div style="display: flex; align-items: center; gap: 8px;">
+                  <el-avatar :size="24" :src="user.avatar" />
+                  <span>{{ user.full_name || user.username }}</span>
+                  <el-tag v-if="user.role" size="small" type="info">{{ user.role }}</el-tag>
+                </div>
+              </el-option>
+            </el-select>
+          </el-form-item>
+          
+          <el-form-item label="Role">
+            <el-select v-model="newMemberRole" style="width: 100%">
+              <el-option label="Member" value="member" />
+              <el-option label="Manager" value="manager" />
+            </el-select>
+          </el-form-item>
+        </el-form>
+        
+        <template #footer>
+          <el-button @click="showAddMemberDialog = false">Cancel</el-button>
+          <el-button type="primary" @click="handleAddMember" :disabled="!selectedUserId">Add</el-button>
+        </template>
+      </el-dialog>
     </div>
   </main-layout>
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, onMounted, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import MainLayout from '@/components/Layout/MainLayout.vue'
 import projectAPI from '@/services/api/projects'
 import taskAPI from '@/services/api/tasks'
-import { ElMessage } from 'element-plus'
-import { ArrowLeft, Calendar, Plus, Document } from '@element-plus/icons-vue'
+import authAPI from '@/services/api/auth'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { ArrowLeft, Calendar, Plus, Document, Delete } from '@element-plus/icons-vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -208,6 +290,11 @@ const members = ref([])
 const versionHistory = ref([])
 const historyLoading = ref(false)
 const showTaskDialog = ref(false)
+const showAddMemberDialog = ref(false)
+const users = ref([])
+const selectedUserId = ref(null)
+const newMemberRole = ref('member')
+const loadingUsers = ref(false)
 
 const newTask = reactive({
   title: '',
@@ -215,7 +302,7 @@ const newTask = reactive({
   start_date: null,
   end_date: null,
   priority: 'medium',
-  assigned_to: null
+  assigned_to: []
 })
 
 const fetchProject = async () => {
@@ -242,6 +329,61 @@ const fetchMembers = async () => {
     members.value = response.data.members
   } catch (error) {
     console.error('Failed to load members:', error)
+  }
+}
+
+// Get IDs of existing project members
+const existingMemberIds = computed(() => {
+  return members.value.map(m => m.user_id)
+})
+
+// Filter users who are not already project members
+const availableUsers = computed(() => {
+  return users.value.filter(user => !existingMemberIds.value.includes(user.id))
+})
+
+// Fetch all users
+const fetchUsers = async () => {
+  loadingUsers.value = true
+  try {
+    const response = await authAPI.getUsers()
+    users.value = response.data.users || []
+  } catch (error) {
+    console.error('Failed to fetch users:', error)
+    ElMessage.error('Failed to load users')
+  } finally {
+    loadingUsers.value = false
+  }
+}
+
+// Handle add member dialog open
+const openAddMemberDialog = () => {
+  showAddMemberDialog.value = true
+  fetchUsers()
+  selectedUserId.value = null
+  newMemberRole.value = 'member'
+}
+
+// Handle add member
+const handleAddMember = async () => {
+  if (!selectedUserId.value) {
+    ElMessage.warning('Please select a user')
+    return
+  }
+
+  try {
+    await projectAPI.addMember(route.params.id, {
+      user_id: selectedUserId.value,
+      role: newMemberRole.value
+    })
+    ElMessage.success('Member added successfully')
+    showAddMemberDialog.value = false
+    fetchMembers()
+    selectedUserId.value = null
+    newMemberRole.value = 'member'
+  } catch (error) {
+    console.error('Failed to add member:', error)
+    ElMessage.error(error.response?.data?.error || 'Failed to add member')
   }
 }
 
@@ -311,7 +453,7 @@ const handleCreateTask = async () => {
     start_date: newTask.start_date.toISOString(),
     end_date: newTask.end_date.toISOString(),
     priority: newTask.priority,
-    assigned_to: newTask.assigned_to
+    assigned_to: newTask.assigned_to.length > 0 ? newTask.assigned_to : null
   }
 
   try {
@@ -325,10 +467,33 @@ const handleCreateTask = async () => {
       start_date: null,
       end_date: null,
       priority: 'medium',
-      assigned_to: null
+      assigned_to: []
     })
   } catch (error) {
     ElMessage.error('Failed to create task')
+  }
+}
+
+const handleRemoveMember = async (member) => {
+  try {
+    await ElMessageBox.confirm(
+      `Are you sure you want to remove ${member.user_name} from the project?`,
+      'Remove Member',
+      {
+        confirmButtonText: 'Remove',
+        cancelButtonText: 'Cancel',
+        type: 'warning'
+      }
+    )
+    
+    await projectAPI.removeMember(route.params.id, member.id)
+    ElMessage.success(`${member.user_name} has been removed from the project`)
+    fetchMembers()
+  } catch (error) {
+    if (error !== 'cancel') {
+      console.error('Failed to remove member:', error)
+      ElMessage.error(error.response?.data?.error || 'Failed to remove member')
+    }
   }
 }
 
@@ -391,6 +556,10 @@ onMounted(() => {
 .member-item span {
   flex: 1;
   font-size: 14px;
+}
+
+.text-gray {
+  color: #909399;
 }
 </style>
 

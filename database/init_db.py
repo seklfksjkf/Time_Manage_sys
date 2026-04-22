@@ -131,7 +131,23 @@ class DatabaseInitializer:
                     INDEX idx_depends_on (depends_on_task_id)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
             """,
-            
+
+            'task_assignments': """
+                CREATE TABLE IF NOT EXISTS task_assignments (
+                    id INT PRIMARY KEY AUTO_INCREMENT,
+                    task_id INT NOT NULL,
+                    user_id INT NOT NULL,
+                    assigned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    assigned_by INT,
+                    FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE,
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                    FOREIGN KEY (assigned_by) REFERENCES users(id) ON DELETE SET NULL,
+                    UNIQUE KEY unique_task_assignment (task_id, user_id),
+                    INDEX idx_task (task_id),
+                    INDEX idx_user (user_id)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+            """,
+
             'milestones': """
                 CREATE TABLE IF NOT EXISTS milestones (
                     id INT PRIMARY KEY AUTO_INCREMENT,
