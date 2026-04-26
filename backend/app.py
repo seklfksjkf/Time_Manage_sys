@@ -60,11 +60,12 @@ def create_app():
     
     # Import and register blueprints
     from routes import auth_routes, project_routes, task_routes, timeline_routes
-    from routes import milestone_routes, notification_routes, dashboard_routes, export_routes
+    from routes import milestone_routes, notification_routes, dashboard_routes, export_routes, ai_routes
     
     app.register_blueprint(auth_routes.bp, url_prefix='/api/auth')
     app.register_blueprint(project_routes.bp, url_prefix='/api/projects')
     app.register_blueprint(task_routes.bp, url_prefix='/api/tasks')
+    app.register_blueprint(ai_routes.bp, url_prefix='/api/ai')
     app.register_blueprint(timeline_routes.bp, url_prefix='/api/timeline')
     app.register_blueprint(milestone_routes.bp, url_prefix='/api/milestones')
     app.register_blueprint(notification_routes.bp, url_prefix='/api/notifications')

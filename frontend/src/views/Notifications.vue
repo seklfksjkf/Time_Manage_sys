@@ -53,6 +53,7 @@
 
 <script setup>
 import { ref, computed, onMounted } from 'vue'
+import { useRouter } from 'vue-router'
 import MainLayout from '@/components/Layout/MainLayout.vue'
 import notificationAPI from '@/services/api/notifications'
 import { ElMessage } from 'element-plus'
@@ -65,6 +66,7 @@ import {
 } from '@element-plus/icons-vue'
 
 const notifications = ref([])
+const router = useRouter()
 
 const hasUnread = computed(() => {
   return notifications.value.some(n => !n.is_read)
@@ -116,9 +118,26 @@ const markAllRead = async () => {
   }
 }
 
-const handleNotificationClick = (notification) => {
+const handleNotificationClick = async (notification) => {
   if (!notification.is_read) {
-    markRead(notification.id)
+    await markRead(notification.id)
+  }
+
+  // Navigate to related entity if provided by backend
+  if (notification.related_entity_type === 'task') {
+    router.push({ path: '/tasks', query: { task_id: String(notification.related_entity_id ?? '') } })
+    return
+  }
+
+  if (notification.related_entity_type === 'project') {
+    if (notification.related_entity_id != null) {
+      router.push(`/projects/${notification.related_entity_id}`)
+    }
+    return
+  }
+
+  if (notification.related_entity_type === 'milestone') {
+    router.push({ path: '/dashboard' })
   }
 }
 

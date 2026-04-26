@@ -124,9 +124,14 @@
             <template #header>
               <div style="display: flex; justify-content: space-between; align-items: center;">
                 <span>Version History</span>
-                <el-button size="small" @click="loadVersionHistory" :loading="historyLoading">
-                  <el-icon><Refresh /></el-icon>
-                </el-button>
+                <div style="display: flex; gap: 8px; align-items: center;">
+                  <el-button size="small" @click="handleRiskScan" :loading="aiLoadingRiskScan">
+                    Risk Scan
+                  </el-button>
+                  <el-button size="small" @click="loadVersionHistory" :loading="historyLoading">
+                    <el-icon><Refresh /></el-icon>
+                  </el-button>
+                </div>
               </div>
             </template>
             <el-timeline v-if="versionHistory.length > 0">
@@ -138,7 +143,6 @@
               >
                 <div class="history-item">
                   <div class="history-type">{{ item.change_type }}</div>
-                  <div class="history-details">{{ item.changes || 'No details' }}</div>
                   <div class="history-user">by {{ item.changed_by_name || 'Unknown' }}</div>
                 </div>
               </el-timeline-item>
@@ -220,6 +224,23 @@
               </el-form-item>
             </el-col>
           </el-row>
+
+          <el-row :gutter="20">
+            <el-col :span="12">
+              <el-form-item label="Estimated Duration (days)">
+                <div style="display: flex; gap: 8px; width: 100%;">
+                  <el-input-number v-model="newTask.estimated_duration" :min="1" style="flex: 1;" />
+                  <el-button @click="handleSuggestDuration" :loading="aiLoadingDuration">AI Suggest</el-button>
+                </div>
+              </el-form-item>
+            </el-col>
+
+            <el-col :span="12">
+              <el-form-item label="AI Assignee Suggestion">
+                <el-button @click="handleSuggestAssignees" :loading="aiLoadingAssignees" style="width: 100%;">Suggest Members</el-button>
+              </el-form-item>
+            </el-col>
+          </el-row>
         </el-form>
         
         <template #footer>
@@ -277,9 +298,10 @@ import { useRoute, useRouter } from 'vue-router'
 import MainLayout from '@/components/Layout/MainLayout.vue'
 import projectAPI from '@/services/api/projects'
 import taskAPI from '@/services/api/tasks'
+import aiAPI from '@/services/api/ai'
 import authAPI from '@/services/api/auth'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { ArrowLeft, Calendar, Plus, Document, Delete } from '@element-plus/icons-vue'
+import { ArrowLeft, Calendar, Plus, Document, Delete, Refresh } from '@element-plus/icons-vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -296,13 +318,18 @@ const selectedUserId = ref(null)
 const newMemberRole = ref('member')
 const loadingUsers = ref(false)
 
+const aiLoadingDuration = ref(false)
+const aiLoadingAssignees = ref(false)
+const aiLoadingRiskScan = ref(false)
+
 const newTask = reactive({
   title: '',
   description: '',
   start_date: null,
   end_date: null,
   priority: 'medium',
-  assigned_to: []
+  assigned_to: [],
+  estimated_duration: null
 })
 
 const fetchProject = async () => {
@@ -415,6 +442,21 @@ const formatDateTime = (dateTime) => {
   })
 }
 
+const formatHistoryChanges = (changes) => {
+  if (!changes) return 'No details'
+  if (typeof changes === 'string') {
+    try {
+      changes = JSON.parse(changes)
+    } catch {
+      return changes
+    }
+  }
+  if (changes.title) {
+    return changes.title
+  }
+  return JSON.stringify(changes)
+}
+
 const loadVersionHistory = async () => {
   historyLoading.value = true
   try {
@@ -453,7 +495,8 @@ const handleCreateTask = async () => {
     start_date: newTask.start_date.toISOString(),
     end_date: newTask.end_date.toISOString(),
     priority: newTask.priority,
-    assigned_to: newTask.assigned_to.length > 0 ? newTask.assigned_to : null
+    assigned_to: newTask.assigned_to.length > 0 ? newTask.assigned_to : null,
+    estimated_duration: newTask.estimated_duration
   }
 
   try {
@@ -467,10 +510,66 @@ const handleCreateTask = async () => {
       start_date: null,
       end_date: null,
       priority: 'medium',
-      assigned_to: []
+      assigned_to: [],
+      estimated_duration: null
     })
   } catch (error) {
     ElMessage.error('Failed to create task')
+  }
+}
+
+const handleSuggestDuration = async () => {
+  if (!newTask.title) {
+    ElMessage.warning('Please enter task title first')
+    return
+  }
+  aiLoadingDuration.value = true
+  try {
+    const res = await aiAPI.suggestTaskDuration({
+      project_id: Number(route.params.id),
+      title: newTask.title,
+      priority: newTask.priority
+    })
+    newTask.estimated_duration = res.data.suggested_days
+  } catch (e) {
+    ElMessage.error('Failed to get AI duration suggestion')
+  } finally {
+    aiLoadingDuration.value = false
+  }
+}
+
+const handleSuggestAssignees = async () => {
+  aiLoadingAssignees.value = true
+  try {
+    const res = await aiAPI.suggestResources({
+      project_id: Number(route.params.id),
+      start_date: newTask.start_date ? newTask.start_date.toISOString() : undefined,
+      end_date: newTask.end_date ? newTask.end_date.toISOString() : undefined
+    })
+    const suggestions = res.data.suggestions || []
+    if (suggestions.length === 0) {
+      ElMessage.info('No suggestions available')
+      return
+    }
+    // pick the lowest workload member
+    const best = suggestions[0]
+    newTask.assigned_to = [best.user_id]
+  } catch (e) {
+    ElMessage.error('Failed to get AI assignee suggestions')
+  } finally {
+    aiLoadingAssignees.value = false
+  }
+}
+
+const handleRiskScan = async () => {
+  aiLoadingRiskScan.value = true
+  try {
+    const res = await aiAPI.scanDeadlineRisk({ project_id: Number(route.params.id) })
+    ElMessage.success(`Risk scan completed: ${res.data.notifications_created} notifications created`)
+  } catch (e) {
+    ElMessage.error('Failed to run risk scan')
+  } finally {
+    aiLoadingRiskScan.value = false
   }
 }
 

@@ -50,12 +50,6 @@
         <span>Don't have an account?</span>
         <router-link to="/register">Register</router-link>
       </div>
-
-      <div class="demo-credentials">
-        <p><strong>Demo Accounts:</strong></p>
-        <p>Admin: admin / admin123</p>
-        <p>Manager: john_doe / password123</p>
-      </div>
     </div>
   </div>
 </template>
